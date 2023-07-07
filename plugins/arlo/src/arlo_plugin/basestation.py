@@ -24,6 +24,15 @@ class ArloBasestation(ArloDeviceBase, DeviceProvider, Settings):
     def __init__(self, nativeId: str, arlo_basestation: dict, provider: ArloProvider) -> None:
         super().__init__(nativeId=nativeId, arlo_device=arlo_basestation, arlo_basestation=arlo_basestation, provider=provider)
 
+        try:
+            import scrypted_arlo_go
+            keys = scrypted_arlo_go.KeysOutput(handle=scrypted_arlo_go._scrypted_arlo_go.scrypted_arlo_go_GenerateRSAKeys(2048))
+            self.logger.info(keys.PublicPEM)
+            self.logger.info(keys.PrivatePEM)
+            self.logger.info(self.provider.arlo.TestEndpoint())
+        except:
+            self.logger.exception("err")
+
     @property
     def has_siren(self) -> bool:
         return any([self.arlo_device["modelId"].lower().startswith(model) for model in ArloBasestation.MODELS_WITH_SIRENS])

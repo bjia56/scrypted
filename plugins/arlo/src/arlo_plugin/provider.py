@@ -7,6 +7,10 @@ import re
 import requests
 import traceback
 from typing import List
+import uuid
+
+import scrypted_arlo_go
+from scrypted_arlo_go import _scrypted_arlo_go
 
 import scrypted_sdk
 from scrypted_sdk import ScryptedDeviceBase
@@ -76,6 +80,35 @@ class ArloProvider(ScryptedDeviceBase, Settings, DeviceProvider, ScryptedDeviceL
     @property
     def arlo_password(self) -> str:
         return self.storage.getItem("arlo_password")
+
+    @property
+    def arlo_device_id(self) -> str:
+        device_id = self.storage.getItem("arlo_device_id")
+        if device_id is None:
+            device_id = str(uuid.uuid4())
+            self.storage.setItem("arlo_device_id", device_id)
+        return device_id
+
+    @property
+    def arlo_public_key(self) -> str:
+        public_key = self.storage.getItem("arlo_public_key")
+        if public_key is None:
+            public_key, _ = self._gen_arlo_keypair()
+        return public_key
+
+    @property
+    def arlo_private_key(self) -> str:
+        private_key = self.storage.getItem("arlo_private_key")
+        if private_key is None:
+            private_key, _ = self._gen_arlo_keypair()
+        return private_key
+
+    def _gen_arlo_keypair(self) -> tuple:
+        keys = scrypted_arlo_go.KeysOutput(handle=_scrypted_arlo_go.scrypted_arlo_go_GenerateRSAKeys(2048))
+        public_key, private_key = keys.PublicPEM, keys.PrivatePEM
+        self.storage.setItem("arlo_public_key", public_key)
+        self.storage.setItem("arlo_private_key", private_key)
+        return public_key, private_key
 
     @property
     def arlo_auth_headers(self) -> str:
@@ -175,7 +208,12 @@ class ArloProvider(ScryptedDeviceBase, Settings, DeviceProvider, ScryptedDeviceL
 
         self.logger.info("Trying to initialize Arlo client...")
         try:
-            self._arlo = Arlo(self.arlo_username, self.arlo_password)
+            # ensure keypair is generated
+            _, _ = self.arlo_public_key, self.arlo_private_key
+            self.logger.info(self.arlo_public_key)
+            self.logger.info(self.arlo_private_key)
+
+            self._arlo = Arlo(self.arlo_username, self.arlo_password, self.arlo_device_id)
             headers = self.arlo_auth_headers
             if headers:
                 self._arlo.UseExistingAuth(self.arlo_user_id, json.loads(headers))

@@ -97,9 +97,10 @@ class Arlo(object):
 
     random.shuffle(BACKUP_AUTH_HOSTS)
 
-    def __init__(self, username, password):
+    def __init__(self, username: str, password: str, device_id: str):
         self.username = username
         self.password = password
+        self.device_id = device_id
         self.event_stream = None
         self.request = None
 
@@ -155,7 +156,6 @@ class Arlo(object):
         self.BASE_URL = 'myapi.arlo.com'
 
     def LoginMFA(self):
-        device_id = str(uuid.uuid4())
         headers = {
             'DNT': '1',
             'schemaVersion': '1',
@@ -165,7 +165,7 @@ class Arlo(object):
             'Referer': f'https://{self.BASE_URL}/',
             'Source': 'arloCamWeb',
             'TE': 'Trailers',
-            'x-user-device-id': device_id,
+            'x-user-device-id': self.device_id,
             'x-user-device-automation-name': 'QlJPV1NFUg==',
             'x-user-device-type': 'BROWSER',
             'Host': self.AUTH_URL,
@@ -1078,3 +1078,16 @@ class Arlo(object):
     @cached(cache=TTLCache(maxsize=1, ttl=60))
     def _getSmartFeaturesCached(self) -> dict:
         return self.request.get(f'https://{self.BASE_URL}/hmsweb/users/subscription/smart/features')
+
+    def TestEndpoint(self, basestation, public_key):
+        resp = self.request.post(
+            f'https://{self.BASE_URL}/hmsweb/users/devices/v2/security/cert/create/',
+            params={
+                'uuid': self.device_id,
+                'publicKey': public_key,
+                'uniqueIds': [
+                    basestation['uniqueId']
+                ]
+            }
+        )
+        return resp
