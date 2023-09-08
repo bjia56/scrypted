@@ -7,8 +7,6 @@ cloudscraper==1.2.71
 curl-cffi==0.5.7
 async-timeout==4.0.2
 beautifulsoup4==4.12.2
-aiortc==1.5.0
-av==9.2.0
 --extra-index-url=https://bjia56.github.io/armv7l-wheels/
 --extra-index-url=https://bjia56.github.io/scrypted-arlo-go/
 --prefer-binary
