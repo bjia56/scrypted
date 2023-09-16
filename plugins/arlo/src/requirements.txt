@@ -2,7 +2,11 @@ paho-mqtt==1.6.1
 aiohttp==3.8.4
 requests==2.28.2
 cachetools==5.3.0
-scrypted-arlo-go==0.5.2
+#scrypted-arlo-go==0.5.2
+/server/volume/plugins/@scrypted/arlo/zip/unzipped/fs/scrypted_arlo_go-0.5.2-cp310-cp310-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+
+
+
 cloudscraper==1.2.71
 curl-cffi==0.5.7
 async-timeout==4.0.2
