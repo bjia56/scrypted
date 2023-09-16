@@ -238,6 +238,7 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
         results = set([
             ScryptedInterface.VideoCamera.value,
             ScryptedInterface.Camera.value,
+            ScryptedInterface.RTCSignalingChannel.value,
             ScryptedInterface.MotionSensor.value,
             ScryptedInterface.Settings.value,
         ])
@@ -491,6 +492,30 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
                         self.last_picture_time = datetime.now()
 
             return await scrypted_sdk.mediaManager.createMediaObject(self.last_picture, "image/jpeg")
+
+    @async_print_exception_guard
+    async def startRTCSignalingSession(self, scrypted_session):
+        plugin_session = ArloCameraRTCSignalingSession(self)
+
+        scrypted_setup = {
+            "type": "offer",
+            "audio": {
+                "direction": "sendrecv",
+            },
+            "video": {
+                "direction": "sendrecv",
+            }
+        }
+        plugin_setup = {}
+
+        scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, sendIceCandidate=None)
+        self.logger.info(f"Scrypted offer sdp:\n{scrypted_offer['sdp']}")
+        await plugin_session.setRemoteDescription(scrypted_offer, plugin_setup)
+        plugin_answer = await plugin_session.createLocalDescription("answer", plugin_setup, sendIceCandidate=None)
+        self.logger.info(f"Scrypted answer sdp:\n{plugin_answer['sdp']}")
+        await scrypted_session.setRemoteDescription(plugin_answer, scrypted_setup)
+
+        return None#ArloCameraRTCSessionControl(plugin_session)
 
     async def getVideoStreamOptions(self, id: str = None) -> List[ResponseMediaStreamOptions]:
         options = [
@@ -922,3 +947,85 @@ class ArloCameraSIPIntercomSession(ArloCameraIntercomSession):
         if self.arlo_sip is not None:
             self.arlo_sip.Close()
             self.arlo_sip = None
+
+class ArloCameraRTCSignalingSession(BackgroundTaskMixin):
+    def __init__(self, camera):
+        super().__init__()
+        self.camera = camera
+        self.provider = camera.provider
+        self.logger = camera.logger
+        self.arlo_sip = None
+
+    def __del__(self):
+        self.stop_subscriptions = True
+        self.cancel_pending_tasks()
+
+    async def createLocalDescription(self, type, setup, sendIceCandidate=None):
+        if type == "offer":
+            raise Exception("can only create answers in ArloCameraRTCSignalingSession.createLocalDescription")
+        if self.arlo_sip is None:
+            raise Exception("need to initialize sip with setRemoteDescription first")
+
+        answer_sdp = self.arlo_sip.Start()
+        return {
+            "sdp": answer_sdp,
+            "type": "answer"
+        }
+
+    async def setRemoteDescription(self, description, setup):
+        if description["type"] != "offer":
+            raise Exception("can only accept offers in ArloCameraRTCSignalingSession.createLocalDescription")
+
+        sip_info = self.provider.arlo.GetSIPInfoV2(self.camera.arlo_device)
+        self.logger.info(sip_info)
+        sip_call_info = sip_info["sipCallInfo"]
+
+        # though GetSIPInfo returns ice servers, there doesn't seem to be any indication
+        # that they are used on the arlo web dashboard, so just use what Chrome inserts
+        ice_servers = [{"url": "stun:stun.l.google.com:19302"}]
+        self.logger.debug(f"Will use ice servers: {[ice['url'] for ice in ice_servers]}")
+
+        ice_servers = scrypted_arlo_go.Slice_webrtc_ICEServer([
+            scrypted_arlo_go.NewWebRTCICEServer(
+                scrypted_arlo_go.go.Slice_string([ice['url']]),
+                ice.get('username', ''),
+                ice.get('credential', '')
+            )
+            for ice in ice_servers
+        ])
+        sip_cfg = scrypted_arlo_go.SIPInfo(
+            DeviceID=self.camera.nativeId,
+            CallerURI=f"sip:{sip_call_info['id']}@{sip_call_info['domain']}:7443",
+            CalleeURI=sip_call_info['calleeUri'],
+            Password=sip_call_info['password'],
+            UserAgent="SIP.js/0.21.1",
+            WebsocketURI="wss://livestream-z2-prod.arlo.com:7443",
+            WebsocketOrigin="https://my.arlo.com",
+            WebsocketHeaders=scrypted_arlo_go.HeadersMap({"User-Agent": USER_AGENTS["arlo"]}),
+            SDP=description["sdp"],
+        )
+
+        self.arlo_sip = scrypted_arlo_go.NewSIPWebRTCManager(self.camera.logger_server_port, ice_servers, sip_cfg)
+
+
+    async def addIceCandidate(self, candidate):
+        raise Exception("Not supported")
+
+    async def getOptions(self):
+        pass
+
+    async def shutdown(self):
+        pass
+
+
+class ArloCameraRTCSessionControl:
+    def __init__(self, arlo_session):
+        self.arlo_session = arlo_session
+        self.logger = arlo_session.logger
+
+    async def setPlayback(self, options):
+        self.logger.debug(f"setPlayback options {options}")
+
+    async def endSession(self):
+        self.logger.info("Ending RTC session")
+        await self.arlo_session.shutdown()
