@@ -161,7 +161,7 @@ class ObjectDetectionMixin extends SettingsMixinDeviceBase<VideoCamera & Camera 
   maybeStartDetection() {
     if (!this.hasMotionType) {
       // object detection may be restarted if there are slots available.
-      if (this.cameraDevice.motionDetected && this.plugin.canStartObjectDetection())
+      if (this.cameraDevice.motionDetected && this.plugin.canStartObjectDetection(this))
         this.startPipelineAnalysis();
       return;
     }
@@ -1022,6 +1022,12 @@ class ObjectDetectionPlugin extends AutoenableMixinProvider implements Settings,
         return value;
       },
     },
+    developerMode: {
+      group: 'Advanced',
+      title: 'Developer Mode',
+      description: 'Developer mode enables usage of the raw detector object detectors. Using raw object detectors (ie, outside of Scrypted NVR) can cause severe performance degradation.',
+      type: 'boolean',
+    }
   });
 
   shouldUseSnapshotPipeline() {
@@ -1068,15 +1074,27 @@ class ObjectDetectionPlugin extends AutoenableMixinProvider implements Settings,
     return maxConcurrent;
   }
 
-  canStartObjectDetection() {
+  canStartObjectDetection(mixin: ObjectDetectionMixin) {
     const maxConcurrent = this.maxConcurrent;
 
-    const objectDetections = [...this.currentMixins.values()]
+    const runningDetections = [...this.currentMixins.values()]
       .map(d => [...d.currentMixins.values()].filter(dd => !dd.hasMotionType)).flat()
       .filter(c => c.detectorRunning)
       .sort((a, b) => a.detectionStartTime - b.detectionStartTime);
 
-    return objectDetections.length < maxConcurrent;
+    // already running
+    if (runningDetections.find(o => o.id === mixin.id))
+      return false;
+
+    if (runningDetections.length < maxConcurrent)
+      return true;
+
+    const [first] = runningDetections;
+    if (Date.now() - first.detectionStartTime > 30000)
+      return true;
+
+    mixin.console.log(`Not starting object detection to continue processing recent activity on ${first.name}.`);
+    return false;
   }
 
   objectDetectionStarted(name: string, console: Console) {
@@ -1143,7 +1161,7 @@ class ObjectDetectionPlugin extends AutoenableMixinProvider implements Settings,
   }
 
   constructor(nativeId?: ScryptedNativeId) {
-    super(nativeId);
+    super(nativeId, 'v5');
 
     process.nextTick(() => {
       sdk.deviceManager.onDevicesChanged({
@@ -1179,6 +1197,8 @@ class ObjectDetectionPlugin extends AutoenableMixinProvider implements Settings,
 
   async canMixin(type: ScryptedDeviceType, interfaces: string[]): Promise<string[]> {
     if (!interfaces.includes(ScryptedInterface.ObjectDetection))
+      return;
+    if (!this.storageSettings.values.developerMode && !interfaces.includes(ScryptedInterface.ObjectDetectionGenerator))
       return;
     return [ScryptedInterface.MixinProvider];
   }
