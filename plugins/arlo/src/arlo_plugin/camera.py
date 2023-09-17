@@ -522,6 +522,15 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
     async def startRTCSignalingSession(self, scrypted_session):
         plugin_session = ArloCameraRTCSignalingSession(self)
 
+        ice_servers = [
+            {
+                "urls": [f"{blob['type']}:{blob['domain']}:{blob['port']}"],
+                "username": blob.get('username'),
+                "credential": blob.get("credential"),
+            }
+            for blob in plugin_session.sip_info["iceServers"]["data"]
+        ]
+
         scrypted_setup = {
             "type": "offer",
             "audio": {
@@ -532,8 +541,8 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
             },
             "configuration": {
                 "iceServers": [
-                    {"urls": ["stun:stun.l.google.com:19302"]}
-                ],
+                    {"urls": ["stun:stun.l.google.com:19302"]},
+                ] + ice_servers,
                 "iceCandidatePoolSize": 0,
             }
         }
@@ -551,21 +560,14 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
         # for a client like Firefox, disabling trickle will return exceedingly quickly but not
         # include any candidates at all. so, we need to force a wait if there are no candidates
         query_description_again = False
-        try:
-            scrypted_offer = await asyncio.wait_for(
-                scrypted_session.createLocalDescription("offer", scrypted_setup),
-                timeout=3,
-            )
-            self.logger.info("first createoffer returned")
-            if "candidate" not in scrypted_offer['sdp']:
-                self.logger.info("need to sleep for createoffer")
-                await asyncio.sleep(3)
-                query_description_again = True
-        except asyncio.TimeoutError:
-            self.logger.info("first createoffer timed out")
-            query_description_again = True
-        if query_description_again:
+        async def ignore_trickle(c):
+            self.logger.info(f"candidate: {c}")
+            pass
+        scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle)
+        self.logger.info("first createoffer returned")
+        if "candidate" not in scrypted_offer['sdp']:
             self.logger.info("need to query description again")
+            await asyncio.sleep(3)
             async def ignore_trickle(c):
                 pass
             scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle)
@@ -1025,6 +1027,7 @@ class ArloCameraRTCSignalingSession(BackgroundTaskMixin):
         self.provider = camera.provider
         self.logger = camera.logger
         self.arlo_sip = None
+        self.sip_info = self.provider.arlo.GetSIPInfoV2(self.camera.arlo_device)
 
     def __del__(self) -> None:
         self.stop_subscriptions = True
@@ -1046,23 +1049,8 @@ class ArloCameraRTCSignalingSession(BackgroundTaskMixin):
         if description["type"] != "offer":
             raise Exception("can only accept offers in ArloCameraRTCSignalingSession.createLocalDescription")
 
-        sip_info = self.provider.arlo.GetSIPInfoV2(self.camera.arlo_device)
-        self.logger.info(sip_info)
-        sip_call_info = sip_info["sipCallInfo"]
-
-        # though GetSIPInfo returns ice servers, there doesn't seem to be any indication
-        # that they are used on the arlo web dashboard, so just use what Chrome inserts
-        ice_servers = [{"url": "stun:stun.l.google.com:19302"}]
-        self.logger.debug(f"Will use ice servers: {[ice['url'] for ice in ice_servers]}")
-
-        ice_servers = scrypted_arlo_go.Slice_webrtc_ICEServer([
-            scrypted_arlo_go.NewWebRTCICEServer(
-                scrypted_arlo_go.go.Slice_string([ice['url']]),
-                ice.get('username', ''),
-                ice.get('credential', '')
-            )
-            for ice in ice_servers
-        ])
+        sip_call_info = self.sip_info["sipCallInfo"]
+        ice_servers = scrypted_arlo_go.Slice_webrtc_ICEServer([])
         sip_cfg = scrypted_arlo_go.SIPInfo(
             DeviceID=self.camera.nativeId,
             CallerURI=f"sip:{sip_call_info['id']}@{sip_call_info['domain']}:7443",
