@@ -552,11 +552,8 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
         # include any candidates at all. so, we need to force a wait if there are no candidates
         query_description_again = False
         try:
-            async def ignore_trickle(c):
-                self.logger.info(f"Trickle: {c}")
-                pass
             scrypted_offer = await asyncio.wait_for(
-                scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle),
+                scrypted_session.createLocalDescription("offer", scrypted_setup),
                 timeout=3,
             )
             self.logger.info("first createoffer returned")
