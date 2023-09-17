@@ -560,14 +560,23 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
         # for a client like Firefox, disabling trickle will return exceedingly quickly but not
         # include any candidates at all. so, we need to force a wait if there are no candidates
         query_description_again = False
-        async def ignore_trickle(c):
-            self.logger.info(f"candidate: {c}")
-            pass
-        scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle)
-        self.logger.info("first createoffer returned")
-        if "candidate" not in scrypted_offer['sdp']:
-            self.logger.info("need to query description again")
-            await asyncio.sleep(3)
+        try:
+            async def ignore_trickle(c):
+                self.logger.info(f"candidate: {c}")
+                pass
+            scrypted_offer = await asyncio.wait_for(
+                scrypted_session.createLocalDescription("offer", scrypted_setup),
+                timeout=3
+            )
+            self.logger.info("first createoffer returned")
+            if "candidate" not in scrypted_offer['sdp']:
+                self.logger.info("need to query description again")
+                await asyncio.sleep(3)
+                query_description_again = True
+        except asyncio.TimeoutError:
+            self.logger.info("timed out")
+            query_description_again = True
+        if query_description_again:
             async def ignore_trickle(c):
                 pass
             scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle)
