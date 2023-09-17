@@ -559,12 +559,16 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
                 scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle),
                 timeout=3,
             )
+            self.logger.info("first createoffer returned")
             if "candidate" not in scrypted_offer['sdp']:
+                self.logger.info("need to sleep for createoffer")
                 await asyncio.sleep(3)
                 query_description_again = True
         except asyncio.TimeoutError:
+            self.logger.info("first createoffer timed out")
             query_description_again = True
         if query_description_again:
+            self.logger.info("need to query description again")
             async def ignore_trickle(c):
                 pass
             scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle)
