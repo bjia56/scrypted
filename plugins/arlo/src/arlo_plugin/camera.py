@@ -548,12 +548,23 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
         # for a client like werift, creating another description causes problems when reading
         # arlo's SDP, but since werift candidate gathering is fast, we assume that it will finish
         # within our timeout window.
+        # for a client like Firefox, disabling trickle will return exceedingly quickly but not
+        # include any candidates at all. so, we need to force a wait if there are no candidates
+        query_description_again = False
         try:
+            async def ignore_trickle(c):
+                self.logger.info(f"Trickle: {c}")
+                pass
             scrypted_offer = await asyncio.wait_for(
-                scrypted_session.createLocalDescription("offer", scrypted_setup),
+                scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle),
                 timeout=3,
             )
+            if "candidate" not in scrypted_offer['sdp']:
+                await asyncio.sleep(3)
+                query_description_again = True
         except asyncio.TimeoutError:
+            query_description_again = True
+        if query_description_again:
             async def ignore_trickle(c):
                 pass
             scrypted_offer = await scrypted_session.createLocalDescription("offer", scrypted_setup, ignore_trickle)
