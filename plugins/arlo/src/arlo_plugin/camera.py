@@ -393,16 +393,19 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
                     "type": "boolean",
                 },
             )
-        result.extend([
-            {
-                "group": "General",
-                "key": "use_sip_webrtc_streaming",
-                "title": "Use SIP WebRTC Streaming",
-                "value": self.use_sip_webrtc_streaming,
-                "description": "This is Arlo's newest streaming protocol, which uses WebRTC over SIP to serve video and 2 way audio. " + \
-                               "If enabled, will disable RTSP and DASH streaming options.",
-                "type": "boolean",
-            },
+        if self.has_sip_webrtc_streaming:
+            result.append(
+                {
+                    "group": "General",
+                    "key": "use_sip_webrtc_streaming",
+                    "title": "Use SIP WebRTC Streaming",
+                    "value": self.use_sip_webrtc_streaming,
+                    "description": "This is Arlo's newest streaming protocol, which uses WebRTC over SIP to serve video and 2 way audio. " + \
+                                "If enabled, will disable RTSP and DASH streaming options.",
+                    "type": "boolean",
+                }
+            )
+        result.append(
             {
                 "group": "General",
                 "key": "eco_mode",
@@ -411,8 +414,8 @@ class ArloCamera(ArloDeviceBase, Settings, Camera, VideoCamera, DeviceProvider, 
                 "description": "Configures Scrypted to limit the number of requests made to this camera. " + \
                                "Additional eco mode settings will appear when this is turned on.",
                 "type": "boolean",
-            },
-        ])
+            }
+        )
         if not self.use_sip_webrtc_streaming:
             result.append(
                 {
