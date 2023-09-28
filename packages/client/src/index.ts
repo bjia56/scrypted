@@ -1,5 +1,5 @@
 import { MediaObjectOptions, RTCConnectionManagement, RTCSignalingSession, ScryptedStatic } from "@scrypted/types";
-import axios, { AxiosRequestConfig } from 'axios';
+import axios, { AxiosRequestConfig, AxiosRequestHeaders } from 'axios';
 import * as eio from 'engine.io-client';
 import { SocketOptions } from 'engine.io-client';
 import { Deferred } from "../../../common/src/deferred";
@@ -8,7 +8,6 @@ import { BrowserSignalingSession, waitPeerConnectionIceConnected, waitPeerIceCon
 import { DataChannelDebouncer } from "../../../plugins/webrtc/src/datachannel-debouncer";
 import type { IOSocket } from '../../../server/src/io';
 import { MediaObject } from '../../../server/src/plugin/mediaobject';
-import type { MediaObjectRemote } from '../../../server/src/plugin/plugin-api';
 import { attachPluginRemote } from '../../../server/src/plugin/plugin-remote';
 import { RpcPeer } from '../../../server/src/rpc';
 import { createRpcDuplexSerializer, createRpcSerializer } from '../../../server/src/rpc-serializer';
@@ -48,9 +47,8 @@ export interface ScryptedClientStatic extends ScryptedStatic {
     browserSignalingSession?: BrowserSignalingSession;
     address?: string;
     connectionType: ScryptedClientConnectionType;
-    authorization?: string;
-    queryToken?: { [parameter: string]: string };
-    rpcPeer: RpcPeer,
+    rpcPeer: RpcPeer;
+    loginResult: ScryptedClientLoginResult;
 }
 
 export interface ScryptedConnectionOptions {
@@ -59,6 +57,7 @@ export interface ScryptedConnectionOptions {
     webrtc?: boolean;
     baseUrl?: string;
     axiosConfig?: AxiosRequestConfig;
+    previousLoginResult?: ScryptedClientLoginResult;
 }
 
 export interface ScryptedLoginOptions extends ScryptedConnectionOptions {
@@ -154,9 +153,20 @@ export async function loginScryptedClient(options: ScryptedLoginOptions) {
 
 export async function checkScryptedClientLogin(options?: ScryptedConnectionOptions) {
     let { baseUrl } = options || {};
-    const url = combineBaseUrl(baseUrl, 'login');
+    let url = combineBaseUrl(baseUrl, 'login');
+    const headers: AxiosRequestHeaders = {};
+    if (options?.previousLoginResult?.queryToken) {
+        // headers.Authorization = options?.previousLoginResult?.authorization;
+        // const search = new URLSearchParams(options.previousLoginResult.queryToken);
+        // url += '?' + search.toString();
+        const token = options?.previousLoginResult.username + ":" + options.previousLoginResult.token;
+        const hash = Buffer.from(token).toString('base64');
+
+        headers.Authorization = `Basic ${hash}`;
+    }
     const response = await axios.get(url, {
         withCredentials: true,
+        headers,
         ...options?.axiosConfig,
     });
     const scryptedCloud = response.headers['x-scrypted-cloud'] === 'true';
@@ -164,6 +174,7 @@ export async function checkScryptedClientLogin(options?: ScryptedConnectionOptio
     const cloudAddress = response.headers['x-scrypted-cloud-address'];
 
     return {
+        baseUrl,
         hostname: response.data.hostname as string,
         redirect: response.data.redirect as string,
         username: response.data.username as string,
@@ -178,6 +189,17 @@ export async function checkScryptedClientLogin(options?: ScryptedConnectionOptio
         directAddress,
         cloudAddress,
     };
+}
+
+export interface ScryptedClientLoginResult {
+    username: string;
+    token: string;
+    authorization: string;
+    queryToken: { [parameter: string]: string };
+    localAddresses: string[];
+    scryptedCloud: boolean;
+    directAddress: string;
+    cloudAddress: string;
 }
 
 export class ScryptedClientLoginError extends Error {
@@ -215,16 +237,25 @@ export async function redirectScryptedLogout(baseUrl?: string) {
 export async function connectScryptedClient(options: ScryptedClientOptions): Promise<ScryptedClientStatic> {
     const start = Date.now();
     let { baseUrl, pluginId, clientName, username, password } = options;
+
     let authorization: string;
     let queryToken: any;
-
-    const extraHeaders: { [header: string]: string } = {};
     let localAddresses: string[];
     let scryptedCloud: boolean;
     let directAddress: string;
     let cloudAddress: string;
+    let token: string;
 
     console.log('@scrypted/client', packageJson.version);
+
+    const extraHeaders: { [header: string]: string } = {};
+
+    // Chrome will complain about websites making xhr requests to self signed https sites, even
+    // if the cert has been accepted. Other browsers seem fine.
+    // So the default is not to connect to IP addresses on Chrome, but do so on other browsers.
+    const isChrome = globalThis.navigator?.userAgent.includes('Chrome');
+    const isNotChromeOrIsInstalledApp = !isChrome || isInstalledApp();
+    let tryAlternateAddresses = false;
 
     if (username && password) {
         const loginResult = await loginScryptedClient(options as ScryptedLoginOptions);
@@ -236,12 +267,55 @@ export async function connectScryptedClient(options: ScryptedClientOptions): Pro
         cloudAddress = loginResult.cloudAddress;
         authorization = loginResult.authorization;
         queryToken = loginResult.queryToken;
+        token = loginResult.token;
         console.log('login result', Date.now() - start, loginResult);
     }
     else {
-        const loginCheck = await checkScryptedClientLogin({
+        const urlsToCheck = new Set<string>();
+        for (const u of [
+            ...options?.previousLoginResult?.localAddresses || [],
+            options?.previousLoginResult?.directAddress,
+            options?.previousLoginResult?.cloudAddress,
+        ]) {
+            if (u && options?.previousLoginResult?.token && (isNotChromeOrIsInstalledApp || options.direct))
+                urlsToCheck.add(u);
+        }
+
+        // the alternate urls must have a valid response.
+        const loginCheckPromises = [...urlsToCheck].map(async baseUrl => {
+            const loginCheck = await checkScryptedClientLogin({
+                baseUrl,
+                previousLoginResult: options?.previousLoginResult,
+            });
+
+            if (loginCheck.error || loginCheck.redirect)
+                throw new Error('login error');
+
+            if (!loginCheck.authorization || !loginCheck.username || !loginCheck.queryToken) {
+                console.error(loginCheck);
+                throw new Error('malformed login result');
+            }
+
+            return loginCheck;
+        });
+
+        const baseUrlCheck = checkScryptedClientLogin({
             baseUrl,
         });
+        loginCheckPromises.push(baseUrlCheck);
+
+        let loginCheck: Awaited<ReturnType<typeof checkScryptedClientLogin>>;
+        try {
+            loginCheck = await Promise.any(loginCheckPromises);
+            tryAlternateAddresses ||= loginCheck.baseUrl !== baseUrl;
+        }
+        catch (e) {
+            loginCheck = await baseUrlCheck;
+        }
+
+        if (tryAlternateAddresses)
+            console.log('Found direct login. Allowing alternate addresses.')
+
         if (loginCheck.error || loginCheck.redirect)
             throw new ScryptedClientLoginError(loginCheck);
         localAddresses = loginCheck.addresses;
@@ -251,6 +325,7 @@ export async function connectScryptedClient(options: ScryptedClientOptions): Pro
         username = loginCheck.username;
         authorization = loginCheck.authorization;
         queryToken = loginCheck.queryToken;
+        token = loginCheck.token;
         console.log('login checked', Date.now() - start, loginCheck);
     }
 
@@ -271,24 +346,21 @@ export async function connectScryptedClient(options: ScryptedClientOptions): Pro
     // watch for this flush.
     const flush = new Deferred<void>();
 
-    // Chrome will complain about websites making xhr requests to self signed https sites, even
-    // if the cert has been accepted. Other browsers seem fine.
-    // So the default is not to connect to IP addresses on Chrome, but do so on other browsers.
-    const isChrome = globalThis.navigator?.userAgent.includes('Chrome');
-    const isNotChromeOrIsInstalledApp = !isChrome || isInstalledApp();
-
     const addresses: string[] = [];
     const localAddressDefault = isNotChromeOrIsInstalledApp;
-    if (((scryptedCloud && options.local === undefined && localAddressDefault) || options.local) && localAddresses) {
+
+    tryAlternateAddresses ||= scryptedCloud;
+
+    if (((tryAlternateAddresses && options.local === undefined && localAddressDefault) || options.local) && localAddresses) {
         addresses.push(...localAddresses);
     }
 
     const directAddressDefault = directAddress && (isNotChromeOrIsInstalledApp || !isIPAddress(directAddress));
-    if (((scryptedCloud && options.direct === undefined && directAddressDefault) || options.direct) && directAddress) {
+    if (((tryAlternateAddresses && options.direct === undefined && directAddressDefault) || options.direct) && directAddress) {
         addresses.push(directAddress);
     }
 
-    if (((scryptedCloud && options.direct === undefined) || options.direct) && cloudAddress) {
+    if (((tryAlternateAddresses && options.direct === undefined) || options.direct) && cloudAddress) {
         addresses.push(cloudAddress);
     }
 
@@ -505,6 +577,7 @@ export async function connectScryptedClient(options: ScryptedClientOptions): Pro
         await once(check, 'open');
         return {
             ready: check,
+            address: explicitBaseUrl,
             connectionType: 'http',
         };
     })());
@@ -632,9 +705,17 @@ export async function connectScryptedClient(options: ScryptedClientOptions): Pro
             pluginHostAPI: undefined,
             rtcConnectionManagement,
             browserSignalingSession,
-            authorization,
-            queryToken,
             rpcPeer,
+            loginResult: {
+                username,
+                token,
+                directAddress,
+                localAddresses,
+                scryptedCloud,
+                queryToken,
+                authorization,
+                cloudAddress,
+            }
         }
 
         socket.on('close', () => {

@@ -170,7 +170,9 @@ class ScryptedCloud extends ScryptedDeviceBase implements OauthClient, Settings,
             group: 'Advanced',
             title: 'Register',
             type: 'button',
-            onPut: () => this.manager.registrationId.then(r => this.sendRegistrationId(r)),
+            onPut: () => {
+                this.manager.registrationId.then(r => this.sendRegistrationId(r))
+            },
             description: 'Register server with Scrypted Cloud.',
         },
         testPortForward: {
@@ -180,6 +182,14 @@ class ScryptedCloud extends ScryptedDeviceBase implements OauthClient, Settings,
             onPut: () => this.testPortForward(),
             description: 'Test the port forward connection from Scrypted Cloud.',
         },
+        additionalCorsOrigins: {
+            title: "Additional CORS Origins",
+            description: "Debugging purposes only. DO NOT EDIT.",
+            group: 'CORS',
+            multiple: true,
+            combobox: true,
+            defaultValue: [],
+        }
     });
     upnpInterval: NodeJS.Timeout;
     upnpClient = upnp.createClient();
@@ -354,6 +364,9 @@ class ScryptedCloud extends ScryptedDeviceBase implements OauthClient, Settings,
 
     async testPortForward() {
         try {
+            if (this.storageSettings.values.forwardingMode === 'Disabled')
+                throw new Error('Port forwarding is disabled.');
+
             const pluginPath = await endpointManager.getPath(undefined, {
                 public: true,
             });
@@ -481,6 +494,7 @@ class ScryptedCloud extends ScryptedDeviceBase implements OauthClient, Settings,
                     `https://${SCRYPTED_SERVER}`,
                     // chromecast receiver. move this into google home and chromecast plugins?
                     'https://koush.github.io',
+                    ...this.storageSettings.values.additionalCorsOrigins,
                 ],
             });
         }
