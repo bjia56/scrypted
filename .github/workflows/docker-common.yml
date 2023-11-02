@@ -40,6 +40,6 @@ jobs:
           platforms: linux/amd64 #,linux/armhf,linux/arm64
           push: true
           tags: |
-            bjia56/scrypted-common:${{ matrix.NODE_VERSION }}-${{ matrix.BASE }}-${{ matrix.FLAVOR }}
+            bjia56/scrypted-common:${{ matrix.NODE_VERSION }}-${{ matrix.BASE }}-${{ matrix.FLAVOR }}-experimental
           cache-from: type=gha
           cache-to: type=gha,mode=max
