@@ -204,12 +204,12 @@ async def prepare_text_result(d: ObjectDetectionResult, image: scrypted_sdk.Imag
     return image_tensor
 
 
-class TextRecognition(TextRecognition):
+class RKNNTextRecognition(TextRecognition):
     detection: RKNNDetection
     recognition: RKNNRecognition
 
-    def __init__(self, nativeId=None, cpu=""):
-        super().__init__(nativeId)
+    def __init__(self, predict=None, nativeId=None, cpu=""):
+        super().__init__(predict, nativeId)
 
         model_download = model_download_tmpl.format("ppocrv4_det", cpu)
         model_file = os.path.basename(model_download)

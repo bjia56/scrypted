@@ -11,6 +11,7 @@ import numpy as np
 from PIL.Image import Image
 from rknnlite.api import RKNNLite
 
+from common.yolo import parse_yolov9
 from predict import PredictPlugin, Prediction
 from predict.rectangle import Rectangle
 
@@ -20,7 +21,7 @@ from scrypted_sdk import DeviceProvider, ScryptedDeviceType, ScryptedInterface
 # for Rockchip-optimized models, the postprocessing is slightly different from the original models
 from .optimized.yolo import post_process, IMG_SIZE, CLASSES
 
-from .text_recognition import TEXT_RECOGNITION_NATIVE_ID, TextRecognition
+from .text_recognition import TEXT_RECOGNITION_NATIVE_ID, RKNNTextRecognition
 
 
 rknn_verbose = False
@@ -59,10 +60,10 @@ def ensure_compatibility_and_get_cpu():
 
 
 class RKNNPlugin(PredictPlugin, DeviceProvider):
-    labels = {i: CLASSES[i] for i in range(len(CLASSES))}
+    labels = {0: "person", 1: "vehicle", 2: "animal"}#{i: CLASSES[i] for i in range(len(CLASSES))}
     rknn_runtimes: dict
     executor: concurrent.futures.ThreadPoolExecutor
-    text_recognition: TextRecognition = None
+    text_recognition: RKNNTextRecognition = None
     cpu: str
 
     def __init__(self, nativeId=None):
@@ -80,7 +81,7 @@ class RKNNPlugin(PredictPlugin, DeviceProvider):
             else:
                 raise RuntimeError('librknnrt.so not found. Please download it from {} and place it at {}'.format(lib_download, lib_path))
 
-        model_download = model_download_tmpl.format(self.modelName, self.cpu)
+        model_download = "https://github.com/bjia56/actions-experiments/releases/download/test/scrypted_yolov9t_relu_320_RK3588_320x320.rknn"#model_download_tmpl.format(self.modelName, self.cpu)
         model_file = os.path.basename(model_download)
         model_path = self.downloadFile(model_download, model_file)
         print('Using model {}'.format(model_path))
@@ -128,20 +129,20 @@ class RKNNPlugin(PredictPlugin, DeviceProvider):
             "devices": devices,
         })
 
-    async def getDevice(self, nativeId: str) -> TextRecognition:
+    async def getDevice(self, nativeId: str) -> RKNNTextRecognition:
         try:
             if nativeId == TEXT_RECOGNITION_NATIVE_ID:
-                self.text_recognition = self.text_recognition or TextRecognition(nativeId, self.cpu)
+                self.text_recognition = self.text_recognition or RKNNTextRecognition(self, nativeId, self.cpu)
                 return self.text_recognition
         except:
             traceback.print_exc()
             raise
 
     def get_input_details(self) -> Tuple[int]:
-        return (IMG_SIZE[0], IMG_SIZE[1], 3)
+        return (320, 320, 3)
 
     def get_input_size(self) -> Tuple[int, int]:
-        return IMG_SIZE
+        return (320, 320)
 
     async def detect_once(self, input: Image, settings: Any, src_size, cvss) -> Coroutine[Any, Any, Any]:
         def inference(input_tensor):
@@ -151,8 +152,13 @@ class RKNNPlugin(PredictPlugin, DeviceProvider):
 
         async def predict(input_tensor):
             fut = asyncio.wrap_future(self.executor.submit(inference, input_tensor))
-            outputs = await fut
+            outputs = np.array(await fut)
+            outputs = outputs.squeeze()
+            print(f"outputs shape: {outputs.shape}")
+            predictions = parse_yolov9(outputs)
+            """
             boxes, classes, scores = post_process(outputs)
+
 
             predictions: List[Prediction] = []
             for i in range(len(classes)):
@@ -162,7 +168,11 @@ class RKNNPlugin(PredictPlugin, DeviceProvider):
                     float(scores[i]),
                     Rectangle(float(boxes[i][0]), float(boxes[i][1]), float(boxes[i][2]), float(boxes[i][3]))
                 ))
-
+            """
+            print(predictions)
             return self.create_detection_result(predictions, src_size, cvss)
         input_tensor = np.expand_dims(np.asarray(input), axis=0)
+        input_tensor = input_tensor.transpose((0, 3, 1, 2))
+        input_tensor = input_tensor.astype(np.float32) / 255.0
+        input_tensor = np.ascontiguousarray(input_tensor)
         return await predict(input_tensor)
